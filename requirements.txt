@@ -1,0 +1,30 @@
+# LLM & Agent
+anthropic>=0.40.0
+langchain>=0.3.0
+langchain-anthropic>=0.3.0
+
+# Graph Database (PGS)
+neo4j>=5.20.0
+
+# Vector Store (Knowledge Base)
+chromadb>=0.5.0
+
+# Relational Database
+psycopg2-binary>=2.9.0
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+
+# API
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.7.0
+
+# Document Processing
+python-docx>=1.1.0
+PyPDF2>=3.0.0
+python-multipart>=0.0.9
+
+# Utilities
+python-dotenv>=1.0.0
+loguru>=0.7.0
+httpx>=0.27.0
