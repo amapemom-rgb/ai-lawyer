@@ -38,15 +38,15 @@ pending_clarifications: dict[int, dict] = {}
 async def cmd_start(message: Message):
     """Приветствие нового пользователя."""
     await message.answer(
-        "📚 *ИИ-Юрист*\n\n"
+        "\U0001f4da *ИИ-Юрист*\n\n"
         "Привет! Я — интеллектуальный юридический ассистент.\n\n"
         "Я могу помочь с:\n"
-        "• Поиском нужных законов и статей\n"
-        "• Составлением претензий и писем\n"
-        "• Анализом договоров и правил\n"
-        "• Разбором юридических ситуаций\n\n"
+        "\u2022 Поиском нужных законов и статей\n"
+        "\u2022 Составлением претензий и писем\n"
+        "\u2022 Анализом договоров и правил\n"
+        "\u2022 Разбором юридических ситуаций\n\n"
         "Просто напишите свой вопрос, и я постараюсь помочь.\n"
-        "Если мне не хватит информации, я обязательно уточню 😉",
+        "Если мне не хватит информации, я обязательно уточню \U0001f609",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -55,7 +55,7 @@ async def cmd_start(message: Message):
 async def cmd_help(message: Message):
     """Справка по командам."""
     await message.answer(
-        "📖 *Команды*\n\n"
+        "\U0001f4d6 *Команды*\n\n"
         "/start — начать сначала\n"
         "/help — эта справка\n"
         "/status — статус системы\n\n"
@@ -68,11 +68,12 @@ async def cmd_help(message: Message):
 @router.message(Command("status"))
 async def cmd_status(message: Message):
     """Статус системы."""
-    kb_count = agent.knowledge.collection.count() if agent else 0
+    kb_count = agent.knowledge.get_document_count() if agent else 0
     await message.answer(
-        "⚙️ *Статус системы*\n\n"
+        "\u2699\ufe0f *Статус системы*\n\n"
         f"Документов в базе знаний: {kb_count}\n"
-        f"Агент: {'\u2705 активен' if agent else '\u274c не инициализирован'}\n"
+        f"Агент: {'\u2705 активен (LangGraph + Claude)' if agent else '\u274c не инициализирован'}\n"
+        f"RAG: {'\u2705 LlamaIndex' if agent else '\u26a0\ufe0f оффлайн'}\n"
         f"ПГС: {'\u2705 подключена' if agent and agent.pgs._driver else '\u26a0\ufe0f оффлайн'}",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -84,7 +85,7 @@ async def cmd_status(message: Message):
 async def handle_text(message: Message):
     """Основной обработчик текстовых сообщений."""
     if not agent:
-        await message.answer("⚠️ Система ещё не инициализирована. Попробуйте позже.")
+        await message.answer("\u26a0\ufe0f Система ещё не инициализирована. Попробуйте позже.")
         return
 
     user_id = message.from_user.id
@@ -96,6 +97,7 @@ async def handle_text(message: Message):
     logger.info(f"[Бот] Запрос от {user_id}: {user_text[:80]}...")
 
     try:
+        # Запрос обрабатывается через LangGraph
         result = agent.process_query(user_text)
 
         if result["type"] == "clarification":
@@ -108,7 +110,7 @@ async def handle_text(message: Message):
                 f"{i+1}. {q}" for i, q in enumerate(result["questions"])
             )
             await message.answer(
-                f"🤔 *Мне нужно уточнить:*\n\n{questions_text}\n\n"
+                f"\U0001f914 *Мне нужно уточнить:*\n\n{questions_text}\n\n"
                 "Ответьте на эти вопросы, и я смогу дать точный ответ.",
                 parse_mode=ParseMode.MARKDOWN,
             )
@@ -116,14 +118,14 @@ async def handle_text(message: Message):
         elif result["type"] == "response":
             # Ответ готов
             confidence = result.get("confidence", 0)
-            confidence_emoji = "🟢" if confidence > 0.8 else "🟡" if confidence > 0.5 else "🟠"
+            confidence_emoji = "\U0001f7e2" if confidence > 0.8 else "\U0001f7e1" if confidence > 0.5 else "\U0001f7e0"
 
             response_text = result["content"]
 
             # Добавляем информацию об источниках
             if result.get("sources"):
                 response_text += f"\n\n—\n{confidence_emoji} Уверенность: {confidence:.0%}"
-                response_text += f"\n📄 Источников: {len(result['sources'])}"
+                response_text += f"\n\U0001f4c4 Источников: {len(result['sources'])}"
 
             # Telegram ограничивает сообщение 4096 символами
             if len(response_text) > 4000:
@@ -139,7 +141,7 @@ async def handle_text(message: Message):
     except Exception as e:
         logger.error(f"[Бот] Ошибка: {e}")
         await message.answer(
-            "❌ Произошла ошибка при обработке запроса. "
+            "\u274c Произошла ошибка при обработке запроса. "
             "Попробуйте переформулировать вопрос."
         )
 
@@ -156,12 +158,12 @@ async def handle_document(message: Message):
     supported = {"pdf", "docx", "txt"}
     if file_ext not in supported:
         await message.answer(
-            f"⚠️ Формат .{file_ext} пока не поддерживается.\n"
+            f"\u26a0\ufe0f Формат .{file_ext} пока не поддерживается.\n"
             f"Поддерживаемые форматы: {', '.join(supported)}"
         )
         return
 
-    await message.answer(f"📥 Принял файл *{file_name}*. Обрабатываю...", parse_mode=ParseMode.MARKDOWN)
+    await message.answer(f"\U0001f4e5 Принял файл *{file_name}*. Обрабатываю...", parse_mode=ParseMode.MARKDOWN)
 
     try:
         # Скачиваем файл
@@ -187,7 +189,7 @@ async def handle_document(message: Message):
 
         if result["status"] == "ok":
             await message.answer(
-                f"✅ Документ *{file_name}* успешно загружен!\n"
+                f"\u2705 Документ *{file_name}* успешно загружен!\n"
                 f"Тип: {result['doc_type']}\n"
                 f"ID: `{result['doc_id']}`",
                 parse_mode=ParseMode.MARKDOWN,
@@ -197,17 +199,17 @@ async def handle_document(message: Message):
                 f"{i+1}. {q}" for i, q in enumerate(result["questions"])
             )
             await message.answer(
-                f"🤔 Я получил документ *{file_name}*, "
-                f"но мне нужна помощь:"\n\n"
+                f"\U0001f914 Я получил документ *{file_name}*, "
+                f"но мне нужна помощь:\n\n"
                 f"{questions_text}",
                 parse_mode=ParseMode.MARKDOWN,
             )
         else:
-            await message.answer(f"❌ Ошибка: {result.get('message', 'неизвестная ошибка')}")
+            await message.answer(f"\u274c Ошибка: {result.get('message', 'неизвестная ошибка')}")
 
     except Exception as e:
         logger.error(f"[Бот] Ошибка загрузки документа: {e}")
-        await message.answer("❌ Не удалось обработать документ. Попробуйте ещё раз.")
+        await message.answer("\u274c Не удалось обработать документ. Попробуйте ещё раз.")
 
 
 # === ЗАПУСК ===
@@ -241,6 +243,7 @@ async def main():
         port=int(os.getenv("CHROMA_PORT", "8000")),
     ) if chroma_host else KnowledgeStore()
 
+    # Агент теперь на LangGraph
     agent = LegalAgent(
         api_key=anthropic_key,
         model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
@@ -253,7 +256,7 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
 
-    logger.info("🤖 Telegram-бот ИИ-Юрист запущен")
+    logger.info("\U0001f916 Telegram-бот ИИ-Юрист запущен (LangGraph + LlamaIndex)")
     await dp.start_polling(bot)
 
 

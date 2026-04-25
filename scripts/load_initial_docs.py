@@ -3,7 +3,7 @@
 
 Запуск: python scripts/load_initial_docs.py
 
-Загружает все файлы из data/initial_docs/ в ChromaDB.
+Загружает все файлы из data/initial_docs/ через LlamaIndex в ChromaDB.
 Не требует Docker — использует in-memory хранилище или
 локальный ChromaDB сервер, если указан в .env.
 """
@@ -76,7 +76,7 @@ DOCUMENTS = [
 
 
 def main():
-    logger.info("📚 Загрузка начальной базы знаний...")
+    logger.info("\U0001f4da Загрузка начальной базы знаний (LlamaIndex)...")
 
     # Инициализация хранилища
     chroma_host = os.getenv("CHROMA_HOST")
@@ -88,7 +88,7 @@ def main():
         logger.info(f"Подключено к ChromaDB серверу: {chroma_host}")
     else:
         knowledge = KnowledgeStore()
-        logger.info("Используется in-memory хранилище (ChromaDB)")
+        logger.info("Используется in-memory хранилище (ChromaDB + LlamaIndex)")
 
     # Загрузка документов
     docs_dir = project_root / "data" / "initial_docs"
@@ -99,7 +99,7 @@ def main():
         file_path = docs_dir / doc_info["file"]
 
         if not file_path.exists():
-            logger.error(f"❌ Файл не найден: {file_path}")
+            logger.error(f"\u274c Файл не найден: {file_path}")
             errors += 1
             continue
 
@@ -112,23 +112,23 @@ def main():
             doc_type=doc_info["type"],
         )
         loaded += 1
-        logger.info(f"✅ {doc_info['title']}")
+        logger.info(f"\u2705 {doc_info['title']}")
 
-    logger.info(f"\n🎉 Загружено: {loaded} | Ошибок: {errors}")
-    logger.info(f"📊 Всего чанков в базе: {knowledge.collection.count()}")
+    logger.info(f"\n\U0001f389 Загружено: {loaded} | Ошибок: {errors}")
+    logger.info(f"\U0001f4ca Всего записей в базе: {knowledge.get_document_count()}")
 
-    # Тестовый запрос
-    logger.info("\n🔍 Тестовый запрос: 'возврат товара на маркетплейсе'")
+    # Тестовый запрос через LlamaIndex retriever
+    logger.info("\n\U0001f50d Тестовый запрос: 'возврат товара на маркетплейсе'")
     results = knowledge.search("возврат товара на маркетплейсе", top_k=3)
 
     for i, doc in enumerate(results, 1):
         title = doc.get("title", "без названия")
-        distance = doc.get("distance", "?")
+        score = doc.get("score", "?")
         preview = doc.get("content", "")[:100]
-        logger.info(f"  {i}. [{title}] (distance: {distance})")
+        logger.info(f"  {i}. [{title}] (score: {score})")
         logger.info(f"     {preview}...")
 
-    logger.info("\n✅ База знаний готова!")
+    logger.info("\n\u2705 База знаний готова (LlamaIndex + ChromaDB)!")
 
 
 if __name__ == "__main__":

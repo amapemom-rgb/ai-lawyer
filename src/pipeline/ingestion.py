@@ -1,15 +1,17 @@
 """
-Входной конвейер документов.
+Входной конвейер документов — на LlamaIndex.
 
 Отвечает за:
-1. Парсинг документов (PDF, DOCX, TXT)
+1. Парсинг документов (PDF, DOCX, TXT) через LlamaIndex readers
 2. Классификацию (новый документ / изменение / дополнение)
-3. Загрузку в базу знаний и ПГС
+3. Загрузку в базу знаний (LlamaIndex + ChromaDB) и ПГС (Neo4j)
 4. Вызов «Почемучки» если документ не удаётся классифицировать
 """
 
 from pathlib import Path
 from loguru import logger
+
+from llama_index.core import Document as LlamaDocument
 from src.knowledge.store import KnowledgeStore
 from src.pgs.graph import PGSGraph
 
@@ -37,7 +39,7 @@ class IngestionPipeline:
 
         Returns:
             {
-                "status": "ok" | "needs_clarification",
+                "status": "ok" | "needs_clarification" | "error",
                 "doc_id": str,
                 "doc_type": str,
                 "questions": list[str] | None,
@@ -77,11 +79,12 @@ class IngestionPipeline:
                 change_type = metadata.get("change_type", "amends")
                 self.pgs.add_change_link(original_id, doc_id, change_type)
 
-        # 6. Загрузка в базу знаний
+        # 6. Загрузка в базу знаний через LlamaIndex
+        doc_title = metadata.get("title", path.stem) if metadata else path.stem
         self.knowledge.add_document(
             doc_id=doc_id,
             content=content,
-            title=metadata.get("title", path.stem) if metadata else path.stem,
+            title=doc_title,
             doc_type=doc_type,
             metadata=metadata,
         )
@@ -89,7 +92,7 @@ class IngestionPipeline:
         # 7. Добавление узла в ПГС
         self.pgs.add_document_node(
             doc_id=doc_id,
-            title=metadata.get("title", path.stem) if metadata else path.stem,
+            title=doc_title,
             doc_type=doc_type,
             metadata=metadata,
         )
@@ -101,6 +104,32 @@ class IngestionPipeline:
             "doc_type": doc_type,
             "questions": None,
         }
+
+    def ingest_text(self, text: str, doc_id: str, title: str, doc_type: str = "law", metadata: dict = None) -> dict:
+        """
+        Загрузка текста напрямую (без файла).
+        Удобно для загрузки из API или скриптов.
+        """
+        meta = metadata or {}
+        meta["title"] = title
+
+        self.knowledge.add_document(
+            doc_id=doc_id,
+            content=text,
+            title=title,
+            doc_type=doc_type,
+            metadata=meta,
+        )
+
+        self.pgs.add_document_node(
+            doc_id=doc_id,
+            title=title,
+            doc_type=doc_type,
+            metadata=meta,
+        )
+
+        logger.info(f"Текст загружен: {doc_id} [{doc_type}] '{title}'")
+        return {"status": "ok", "doc_id": doc_id, "doc_type": doc_type}
 
     def _parse(self, path: Path) -> str | None:
         """Извлечение текста из файла."""

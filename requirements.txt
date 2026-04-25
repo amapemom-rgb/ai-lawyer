@@ -1,13 +1,24 @@
-# LLM & Agent
+# LLM & Agent Orchestration
 anthropic>=0.40.0
 langchain>=0.3.0
 langchain-anthropic>=0.3.0
+langgraph>=0.3.0
+langchain-community>=0.3.0
+
+# LlamaIndex — RAG Engine
+llama-index>=0.12.0
+llama-index-llms-anthropic>=0.6.0
+llama-index-vector-stores-chroma>=0.4.0
+llama-index-embeddings-huggingface>=0.5.0
 
 # Graph Database (PGS)
 neo4j>=5.20.0
 
-# Vector Store (Knowledge Base)
+# Vector Store
 chromadb>=0.5.0
+
+# Embeddings (local, no API key needed)
+sentence-transformers>=3.0.0
 
 # Relational Database
 psycopg2-binary>=2.9.0
