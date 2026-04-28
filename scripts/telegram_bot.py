@@ -24,6 +24,7 @@ Telegram-бот ИИ-Юрист (Hellen26_bot).
 """
 
 import os
+import re
 import json
 import hashlib
 import asyncio
@@ -135,7 +136,7 @@ class SemanticSearchEngine:
         self.chunks = []
         self.embeddings = None
         self._cache_hash = None
-        self._doc_titles = {}  # filename -> title
+        self._doc_titles = {}
 
     def load_documents(self) -> dict:
         """Загрузка и разбивка документов. Возвращает статистику."""
@@ -148,12 +149,10 @@ class SemanticSearchEngine:
             stats["errors"].append(f"Папка {DOCS_DIR} не найдена")
             return stats
 
-        # Загружаем все .txt файлы из папки
         all_content = ""
         for filepath in sorted(DOCS_DIR.glob("*.txt")):
             try:
                 content = filepath.read_text(encoding="utf-8")
-                # Берём заголовок из первой строки или имени файла
                 first_line = content.strip().split("\n")[0][:80]
                 title = first_line if first_line else filepath.stem
 
@@ -174,7 +173,6 @@ class SemanticSearchEngine:
         if not self.chunks:
             return "❌ Нет документов для индексации"
 
-        # Проверяем кэш
         if CACHE_FILE.exists():
             try:
                 cache = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
@@ -184,12 +182,10 @@ class SemanticSearchEngine:
             except Exception:
                 pass
 
-        # Создаём эмбеддинги
         texts = [chunk["content"] for chunk in self.chunks]
         embeddings = get_embeddings(texts, self.api_key)
         self.embeddings = np.array(embeddings)
 
-        # Сохраняем кэш
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         cache = {
             "hash": self._cache_hash,
@@ -236,7 +232,6 @@ class SemanticSearchEngine:
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
 
-        # Перезагружаем всё
         stats = self.load_documents()
         index_status = self.build_index()
         return f"✅ Добавлен: {filename}\n📊 {stats['loaded']} документов, {stats['chunks']} чанков\n{index_status}"
@@ -310,6 +305,21 @@ class BotStats:
         if user_id not in self.data.get("users", []):
             self.data.setdefault("users", []).append(user_id)
         self._save()
+
+
+# === Конвертация Markdown → HTML ===
+
+def md_to_html(text: str) -> str:
+    """Конвертирует базовый Markdown в HTML для Telegram."""
+    # Убираем ## заголовки → жирный текст
+    text = re.sub(r'^#{1,3}\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
+    # **жирный** → <b>жирный</b>
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    # *курсив* → <i>курсив</i>
+    text = re.sub(r'(?<!</b>)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+    # `код` → <code>код</code>
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+    return text
 
 
 # === Telegram-бот ===
@@ -509,6 +519,9 @@ async def handle_question(message: Message):
 
         # Генерация ответа через Claude
         answer = ask_llm(query, context, API_KEY, MODEL)
+
+        # Конвертируем Markdown → HTML для Telegram
+        answer = md_to_html(answer)
 
         # Добавляем источники
         if sources_text:
