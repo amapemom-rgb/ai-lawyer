@@ -5,17 +5,25 @@ FastAPI — REST API для ИИ-юриста.
 - GET  /health          — проверка состояния
 - POST /query           — запрос к ИИ-юристу (LangGraph)
 - POST /documents/upload — загрузка документа в базу знаний
-- GET  /documents/search — поиск по базе знаний
+- POST /documents/search — поиск по базе знаний
+
+Защита: если задана переменная окружения API_KEY, все эндпоинты
+(кроме /health) требуют заголовок X-API-Key.
 """
 
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, HTTPException
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from loguru import logger
 
 load_dotenv()
+
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
+ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".html"}
 
 # Глобальные объекты
 agent = None
@@ -41,6 +49,7 @@ async def lifespan(app: FastAPI):
         user=os.getenv("NEO4J_USER"),
         password=os.getenv("NEO4J_PASSWORD"),
     ) if neo4j_uri else PGSGraph()
+    pgs.ensure_indexes()
 
     # База знаний (LlamaIndex + ChromaDB)
     chroma_host = os.getenv("CHROMA_HOST")
@@ -49,18 +58,17 @@ async def lifespan(app: FastAPI):
         port=int(os.getenv("CHROMA_PORT", "8000")),
     ) if chroma_host else KnowledgeStore()
 
-    # Агент (LangGraph + Claude)
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key:
+    # Агент (LangGraph): Anthropic напрямую или OpenRouter
+    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    if api_key:
         agent = LegalAgent(
-            api_key=anthropic_key,
-            model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+            api_key=api_key,
             pgs=pgs,
             knowledge=knowledge,
         )
         logger.info("Агент LangGraph инициализирован")
     else:
-        logger.warning("ANTHROPIC_API_KEY не задан — агент не запущен")
+        logger.warning("Ни ANTHROPIC_API_KEY, ни OPENROUTER_API_KEY не заданы — агент не запущен")
 
     yield
 
@@ -69,10 +77,17 @@ async def lifespan(app: FastAPI):
     logger.info("AI Lawyer остановлен")
 
 
+async def verify_api_key(x_api_key: str | None = Header(default=None)):
+    """Простая защита по ключу. Активна, только если задан API_KEY."""
+    expected = os.getenv("API_KEY")
+    if expected and x_api_key != expected:
+        raise HTTPException(status_code=401, detail="Неверный или отсутствующий X-API-Key")
+
+
 app = FastAPI(
     title="AI Lawyer — ИИ-Юрист",
     description="Юридическая система: LangGraph (оркестрация) + LlamaIndex (RAG) + Claude (генерация)",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -95,38 +110,49 @@ class SearchRequest(BaseModel):
 async def health():
     return {
         "status": "ok",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "stack": "LangGraph + LlamaIndex + Claude",
         "agent_ready": agent is not None,
         "documents_count": knowledge.get_document_count() if knowledge else 0,
     }
 
 
-@app.post("/query")
-async def query_agent(request: QueryRequest):
-    """Запрос к ИИ-юристу через LangGraph."""
+@app.post("/query", dependencies=[Depends(verify_api_key)])
+def query_agent(request: QueryRequest):
+    """
+    Запрос к ИИ-юристу через LangGraph.
+
+    Обычный def (не async): FastAPI выполнит его в threadpool,
+    синхронные вызовы LLM/Neo4j/Chroma не заблокируют event loop.
+    """
     if not agent:
-        raise HTTPException(status_code=503, detail="Агент не инициализирован. Проверьте ANTHROPIC_API_KEY.")
+        raise HTTPException(
+            status_code=503,
+            detail="Агент не инициализирован. Проверьте ANTHROPIC_API_KEY / OPENROUTER_API_KEY.",
+        )
 
     try:
-        result = agent.process_query(request.question)
-        return result
-    except Exception as e:
-        logger.error(f"Ошибка запроса: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return agent.process_query(request.question)
+    except Exception:
+        logger.exception("Ошибка обработки запроса")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
-@app.post("/documents/search")
-async def search_documents(request: SearchRequest):
+@app.post("/documents/search", dependencies=[Depends(verify_api_key)])
+def search_documents(request: SearchRequest):
     """Поиск по базе знаний (только ретривал, без генерации)."""
     if not knowledge:
         raise HTTPException(status_code=503, detail="База знаний не инициализирована")
 
-    results = knowledge.search(request.query, top_k=request.top_k)
-    return {"results": results, "count": len(results)}
+    try:
+        results = knowledge.search(request.query, top_k=request.top_k)
+        return {"results": results, "count": len(results)}
+    except Exception:
+        logger.exception("Ошибка поиска")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
-@app.post("/documents/upload")
+@app.post("/documents/upload", dependencies=[Depends(verify_api_key)])
 async def upload_document(
     file: UploadFile = File(...),
     title: str = None,
@@ -136,26 +162,41 @@ async def upload_document(
     if not knowledge or not pgs:
         raise HTTPException(status_code=503, detail="Система не инициализирована")
 
+    # Проверка расширения
+    suffix = f".{file.filename.rsplit('.', 1)[-1].lower()}" if "." in (file.filename or "") else ".txt"
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Недопустимый тип файла '{suffix}'. Разрешены: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    # Проверка размера
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл слишком большой. Лимит: {MAX_UPLOAD_MB} МБ",
+        )
+
     import tempfile
     from src.pipeline.ingestion import IngestionPipeline
 
-    # Сохраняем во временный файл
-    suffix = f".{file.filename.rsplit('.', 1)[-1]}" if "." in file.filename else ".txt"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
         pipeline = IngestionPipeline(knowledge=knowledge, pgs=pgs)
-        result = pipeline.ingest(
+        # Тяжёлая синхронная работа — в threadpool, чтобы не блокировать event loop
+        result = await run_in_threadpool(
+            pipeline.ingest,
             tmp_path,
             metadata={"title": title or file.filename, "type": doc_type},
         )
         return result
-    except Exception as e:
-        logger.error(f"Ошибка загрузки документа: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Ошибка загрузки документа")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
     finally:
         os.unlink(tmp_path)
 
