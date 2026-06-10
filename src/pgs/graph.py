@@ -6,8 +6,19 @@
 Поддерживает "пузыри" — эмерджентные экосистемы вокруг популярных тем.
 """
 
+import re
+
 from neo4j import GraphDatabase
 from loguru import logger
+
+# Спецсимволы синтаксиса Lucene — экранируем, чтобы пользовательский
+# ввод («ст. 18?», «возврат/обмен») не ронял полнотекстовый запрос
+_LUCENE_SPECIAL = re.compile(r'([+\-&|!(){}\[\]^"~*?:\\/])')
+
+
+def sanitize_fulltext_query(query: str) -> str:
+    """Экранирование спецсимволов Lucene в пользовательском запросе."""
+    return _LUCENE_SPECIAL.sub(r"\\\1", query)
 
 
 class PGSGraph:
@@ -23,6 +34,22 @@ class PGSGraph:
         if self._driver:
             self._driver.close()
 
+    # === ИНИЦИАЛИЗАЦИЯ ===
+
+    def ensure_indexes(self):
+        """Создаёт полнотекстовый индекс, если его нет (идемпотентно)."""
+        if not self._driver:
+            return
+        with self._driver.session() as session:
+            session.run(
+                """
+                CREATE FULLTEXT INDEX concept_index IF NOT EXISTS
+                FOR (n:Concept|Document|Bubble)
+                ON EACH [n.title]
+                """
+            )
+            logger.info("ПГС: полнотекстовый индекс concept_index готов")
+
     # === ПОИСК ===
 
     def search_relevant(self, query: str, limit: int = 20) -> list[dict]:
@@ -31,6 +58,10 @@ class PGSGraph:
         Использует полнотекстовый поиск + обход связей.
         """
         if not self._driver:
+            return []
+
+        safe_query = sanitize_fulltext_query(query)
+        if not safe_query.strip():
             return []
 
         with self._driver.session() as session:
@@ -49,12 +80,12 @@ class PGSGraph:
                     target_type: labels(related)[0]
                 }) as connections, score
                 """,
-                query=query, limit=limit,
+                query=safe_query, limit=limit,
             )
             return [
                 {
                     "title": record["node"]["title"],
-                    "type": record["node"].labels.pop() if record["node"].labels else "Unknown",
+                    "type": next(iter(record["node"].labels), "Unknown"),
                     "properties": dict(record["node"]),
                     "connections": record["connections"],
                     "score": record["score"],
@@ -100,6 +131,8 @@ class PGSGraph:
         """
         Обнаружение "пузырей" — тем, которые набирают популярность
         и заслуживают выделения в отдельную экосистему.
+
+        Возвращает только концепты, ещё НЕ состоящие в пузырях.
         """
         if not self._driver:
             return []
@@ -111,6 +144,7 @@ class PGSGraph:
                 WITH c, count(i) as interaction_count
                 WHERE interaction_count >= $threshold
                 OPTIONAL MATCH (c)-[:PART_OF]->(b:Bubble)
+                WITH c, interaction_count, b
                 WHERE b IS NULL
                 RETURN c.title as topic,
                        interaction_count,
